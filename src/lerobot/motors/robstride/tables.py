@@ -97,14 +97,14 @@ class MotorVariable(IntEnum):
 # VMAX: Maximum velocity (rad/s)
 # TMAX: Maximum torque (N·m)
 MOTOR_LIMIT_PARAMS = {
-    MotorType.O0: (12.5, 16, 14),
-    MotorType.O1: (12.5, 17, 17),
-    MotorType.O2: (12.5, 17, 20),
-    MotorType.O3: (12.5, 10, 60),
-    MotorType.O4: (12.5, 10, 120),
-    MotorType.O5: (12.5, 25, 5.5),
-    MotorType.ELO5: (12.5, 25, 6),
-    MotorType.O6: (112.5, 25, 36),
+    MotorType.O0: (12.57, 33, 14),
+    MotorType.O1: (12.57, 44, 17),
+    MotorType.O2: (12.57, 33, 20),
+    MotorType.O3: (12.57, 33, 60),
+    MotorType.O4: (12.57, 33, 120),
+    MotorType.O5: (12.57, 50, 5.5),
+    MotorType.ELO5: (12.57, 50, 6),
+    MotorType.O6: (112.5, 50, 36),
 }
 
 # Motor model names
@@ -162,7 +162,6 @@ CAN_CMD_DISABLE = 0xFD
 CAN_CMD_SET_ZERO = 0xFE
 CAN_CMD_CLEAR_FAULT = 0xFB
 
-CAN_CMD_REFRESH
 
 CAN_CMD_QUERY_PARAM = 0x33
 CAN_CMD_WRITE_PARAM = 0x55

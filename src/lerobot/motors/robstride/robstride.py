@@ -107,12 +107,26 @@ class RobstrideMotorsBus(MotorsBusBase):
         
         # Store motor types and recv IDs
         self._motor_types = {}
+        self._motor_kps = {}
+        self._motor_kds = {}
         for name, motor in self.motors.items():
             if hasattr(motor, "motor_type"):
                 self._motor_types[name] = motor.motor_type
             else:
                 # Default to O0if not specified
                 self._motor_types[name] = MotorType.O0
+
+            if hasattr(motor, "kp"):
+                self._motor_kps[name] = motor.kp
+            else:
+                # Default to 15 if not specified
+                self._motor_kps[name] = 15          
+
+            if hasattr(motor, "kd"):
+                self._motor_kds[name] = motor.kd        
+            else:
+                # Default to O.1 if not specified
+                self._motor_kds[name] = 0.1
             
             # Map recv_id to motor name for filtering responses
             if hasattr(motor, "recv_id"):
@@ -127,7 +141,7 @@ class RobstrideMotorsBus(MotorsBusBase):
         self.last_feedback_time = {}
         for name in self.motors.keys():
             self.enabled[name] = False
-            self.oprationMode[name]=None
+            self.operationlMode[name]=None
             self.currentPosition[name] = None
             self.currentVelocity[name] = None
             self.currentTorque[name] = None
@@ -219,7 +233,7 @@ class RobstrideMotorsBus(MotorsBusBase):
             self._is_connected = False
             raise ConnectionError(f"Failed to connect to CAN bus: {e}")
 
-    def _clear_faults(self,motor) -> None:
+    def _query_status_via_clear_fault(self,motor) -> None:
         """querry fault on one motter, if faut log it  """
         motor_name = self._get_motor_name(motor)
         motor_id = self._get_motor_id(motor_name)
@@ -227,9 +241,9 @@ class RobstrideMotorsBus(MotorsBusBase):
         data = [0xFF] * 7 + [CAN_CMD_CLEAR_FAULT]
         msg = can.Message(arbitration_id=motor_id, data=data, is_extended_id=False)
         self.canbus.send(msg)
-        return(self._recv_faults(expected_recv_id=recv_id))
+        return(self._recv_status_via_clear_fault(expected_recv_id=recv_id))
         
-    def _recv_faults(self, expected_recv_id: Optional[int] = None, timeout: float = 0.001):
+    def _recv_status_via_clear_fault(self, expected_recv_id: Optional[int] = None, timeout: float = 0.001):
         """
         Poll the bus for a response to a fault-clear request.
 
@@ -265,11 +279,25 @@ class RobstrideMotorsBus(MotorsBusBase):
 
         return False, None
 
+
+    def update_motor_state(self, motor) -> bool:
+        has_fault, msg = self._query_status_via_clear_fault(motor)
+        if msg is None:
+            logger.warning(f"No response received from motor '{motor}' during state update.")
+            raise  ConnectionError(f"No response received from motor '{motor}' during state update.")   
+        if has_fault:
+            logger.error(f"Fault reported by motor '{motor}' during state update. msg={msg.data.hex()}")
+            raise RuntimeError(f"Fault reported by motor '{motor}' during state update.")
+
+        self._decode_motor_state(msg.data)  # updates cache
+        return True
+
+
     def _handshake(self) -> None:
         faults = {}
 
         for motor_name in self.motors:
-            has_fault, msg = self._clear_faults(motor_name)
+            has_fault, msg = self._query_status_via_clear_fault(motor_name)
             if has_fault or msg is None:
                 faults[motor_name] = msg
             time.sleep(0.01)
@@ -285,7 +313,7 @@ class RobstrideMotorsBus(MotorsBusBase):
             )
 
 
-    def _switch_operation_mode(motor, mode: ControlMode) -> None:
+    def _switch_operation_mode(self,motor, mode: ControlMode) -> None:
         """Switch the operation mode of a motor.""" 
         motor_name = self._get_motor_name(motor)
         motor_id = self._get_motor_id(motor_name)
@@ -498,7 +526,7 @@ class RobstrideMotorsBus(MotorsBusBase):
         """
         motor_id = self._get_motor_id(motor)
         motor_name = self._get_motor_name(motor)
-        motor_type = self._motor_types.get(motor_name, MotorType.DM4310)
+        motor_type = self._motor_types.get(motor_name)
         if self.operationlMode[motor_name] != ControlMode.MIT:
             raise RuntimeError(f"Motor '{motor_name}' is not in MIT control mode.")
         # Convert degrees to radians for motor control
@@ -560,9 +588,9 @@ class RobstrideMotorsBus(MotorsBusBase):
         q_uint = (data[1] << 8) | data[2]
         dq_uint = (data[3] << 4) | (data[4] >> 4)
         tau_uint = ((data[4] & 0x0F) << 8) | data[5]
-        t_mos = data[6]
-        t_rotor = data[7]
-        
+        t_mos = (data[6] << 8) | data[7]
+
+        motor_type = self._motor_types.get(motor_name)
         # Get motor limits
         pmax, vmax, tmax = MOTOR_LIMIT_PARAMS[motor_type]
         
@@ -581,7 +609,7 @@ class RobstrideMotorsBus(MotorsBusBase):
         self.currentVelocity[motor_name] = velocity_deg_per_sec
         self.currentTorque[motor_name] = torque
         self.currentTemperature[motor_name] = t_mos
-        return position_degrees, velocity_deg_per_sec, torque, t_mos, t_rotor
+        return position_degrees, velocity_deg_per_sec, torque, t_mos
 
     def read(
         self,
@@ -597,30 +625,14 @@ class RobstrideMotorsBus(MotorsBusBase):
         
         # Refresh motor to get latest state
         t_init = time.time()
-        if self.last_feedback_time[motor] is not None and (time.time() - self.last_feedback_time[motor]) < 0.002:
-            # Skip refresh if we got recent feedback (<2ms ago)
-            position_degrees = self.currentPosition[motor]
-            velocity_deg_per_sec = self.currentVelocity[motor]
-            torque = self.currentTorque[motor]
-            t_mos = self.currentTemperature[motor]
-            t_rotor = self.currentTemperature[motor]
-        else:
-            motor_id = self._get_motor_id(motor)
-            expected_recv_id = self._get_motor_recv_id(motor)
-            data = [0xFF] * 7 + [CAN_CMD_CLEAR_FAULT]
-            msg = can.Message(arbitration_id=motor_id, data=data, is_extended_id=False)
-            self.canbus.send(msg)
-            has_fault,response = self._recv_faults(expected_recv_ids, timeout=0.003)  # 3ms total timeout
-            if has_fault :            
-                logger.error(f"Fault detected on motor '{motor}' during read.")   
-                value=None
-            elif responses is None:
-                logger.warning(f"No response from motor '{motor}' during read.")
-                value = None
-            else :
-                motor_type = self._motor_types.get(motor, MotorType.DM4310)
-                position_degrees, velocity_deg_per_sec, torque, t_mos, t_rotor = self._decode_motor_state(msg.data)
-        
+        if self.last_feedback_time[motor] is None or (time.time() - self.last_feedback_time[motor]) > 0.02:
+            self.update_motor_state(motor)
+
+        position_degrees = self.currentPosition[motor]
+        velocity_deg_per_sec = self.currentVelocity[motor]
+        torque = self.currentTorque[motor]
+        t_mos = self.currentTemperature[motor]
+    
         # Return requested data (already in degrees for position/velocity)
         if data_name == "Present_Position":
             value = position_degrees
@@ -631,7 +643,7 @@ class RobstrideMotorsBus(MotorsBusBase):
         elif data_name == "Temperature_MOS":
             value = t_mos
         elif data_name == "Temperature_Rotor":
-            value = t_rotor
+            raise NotImplementedError("Rotor temperature reading not accessible.")
         else:
             raise ValueError(f"Unknown data_name: {data_name}")
         
@@ -655,7 +667,10 @@ class RobstrideMotorsBus(MotorsBusBase):
         # Value is expected to be in degrees for positions
         if data_name == "Goal_Position":
             # Use MIT control with position in degrees
-            self._mit_control(motor, 10.0, 0.5, value, 0, 0)
+            motor_name = self._get_motor_name(motor)
+            kp = self._motor_kps.get(motor_name, 15)
+            kd = self._motor_kds.get(motor_name, 0.1)
+            self._mit_control(motor, kp, kd, value, 0, 0)
         else:
             raise ValueError(f"Writing {data_name} not supported in MIT mode")
 
@@ -678,8 +693,8 @@ class RobstrideMotorsBus(MotorsBusBase):
         updated_motor = []
         # Step 1: Send refresh commands to ALL motors first (no waiting)
         for motor in motors:
-            if last_feedback_time[motor] is not None and (time.time() - last_feedback_time[motor]) < 0.002:
-                # Skip refresh if we got recent feedback (<2ms ago)
+            if self.last_feedback_time[motor] is not None and (time.time() - self.last_feedback_time[motor]) < 0.02:
+                # Skip refresh if we got recent feedback (<20ms ago)
                 continue
             motor_id = self._get_motor_id(motor)
             data = [0xFF] * 7 + [CAN_CMD_CLEAR_FAULT]
@@ -692,23 +707,23 @@ class RobstrideMotorsBus(MotorsBusBase):
         for motor in motors:
             try:
                 if motor in updated_motor:
-                    has_fault,msg = self._recv_faults(None, timeout=0.003)
+                    has_fault,msg = self._recv_status_via_clear_fault(None, timeout=0.003)
                     if msg is None:
-                        logger.warning(f"No response from motor '{motor}' (recv ID: 0x{recv_id:02X})")
+                        logger.warning(f"No response from motor one motor o {updated_motor} during sync read.")
                         value = None
                         continue
                     if has_fault:
+                        
                         logger.error(f"Fault detected on motor '{motor}' during sync read.")
                         value = None
                         continue
-                    position_degrees, velocity_deg_per_sec, torque, t_mos, t_rotor = self._decode_motor_state(msg.data)
+                    position_degrees, velocity_deg_per_sec, torque, t_mos = self._decode_motor_state(msg.data)
                 else:
                     # Use cached values if we didn't refresh this motor
                     position_degrees = self.currentPosition[motor]
                     velocity_deg_per_sec = self.currentVelocity[motor]
                     torque = self.currentTorque[motor]
                     t_mos = self.currentTemperature[motor]
-                    t_rotor = self.currentTemperature[motor]
 
 
                 # Return requested data
@@ -727,7 +742,7 @@ class RobstrideMotorsBus(MotorsBusBase):
                 elif data_name == "Temperature_MOS":
                     value = t_mos
                 elif data_name == "Temperature_Rotor":
-                    value = t_rotor
+                    raise NotImplementedError("Rotor temperature reading not accessible.")
                 else:
                     raise ValueError(f"Unknown data_name: {data_name}")
                 
@@ -756,14 +771,14 @@ class RobstrideMotorsBus(MotorsBusBase):
             for motor, value_degrees in values.items():
                 motor_id = self._get_motor_id(motor)
                 motor_name = self._get_motor_name(motor)
-                motor_type = self._motor_types.get(motor_name, MotorType.DM4310)
+                motor_type = self._motor_types.get(motor_name)
                 if self.operationlMode[motor_name] != ControlMode.MIT:
                     raise RuntimeError(f"Motor '{motor_name}' is not in MIT control mode.")
                 # Convert degrees to radians
                 position_rad = np.radians(value_degrees)
                 
                 # Default gains for position control
-                kp, kd = 10.0, 0.5
+                kp, kd = self._motor_kps.get(motor_name, 15), self._motor_kds.get(motor_name, 0.1)
                 
                 # Get motor limits and encode parameters
                 pmax, vmax, tmax = MOTOR_LIMIT_PARAMS[motor_type]
