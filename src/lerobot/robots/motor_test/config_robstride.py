@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
 from lerobot.cameras import CameraConfig
+
 from ..config import RobotConfig
 
 
@@ -24,13 +24,13 @@ class RobstrideTestConfig(RobotConfig):
     disable_torque_on_disconnect: bool = True
 
     # Limite de déplacement relatif optionnelle
-    max_relative_target: Optional[float | Dict[str, float]] = None
+    max_relative_target: float | dict[str, float] | None = None
 
     # Caméras (laisse vide pour le test moteur)
-    cameras: Dict[str, CameraConfig] = field(default_factory=dict)
+    cameras: dict[str, CameraConfig] = field(default_factory=dict)
 
     # Config moteur : {nom_joint: (send_can_id, recv_can_id, motor_type_str)}
-    motor_config: Dict[str, tuple[int, int, str]] = field(
+    motor_config: dict[str, tuple[int, int, str]] = field(
         default_factory=lambda: {
             "joint_1": (0x01, 0x01, "ELO5"),  # à adapter au vrai type si besoin
         }

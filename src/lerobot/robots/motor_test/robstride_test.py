@@ -3,13 +3,13 @@
 import logging
 import time
 from functools import cached_property
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
-from lerobot.motors.robstride import RobstrideMotorsBus,CommMode  # adapte le chemin exact
+from lerobot.motors.robstride import RobstrideMotorsBus  # adapte le chemin exact
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..robot import Robot
@@ -34,8 +34,7 @@ class RobstrideTest(Robot):
         norm_mode = MotorNormMode.DEGREES
 
         # Motors: {nom_joint: Motor}
-        self.motors: Dict[str, Motor] = {}
-
+        self.motors: dict[str, Motor] = {}
 
         # config.motor_config: {name: (send_id, recv_id, motor_type_str)}
         for motor_name, (send_id, recv_id, motor_type_str) in self.config.motor_config.items():
@@ -65,32 +64,29 @@ class RobstrideTest(Robot):
     # --------- Features / spaces ---------
 
     @property
-    def _motors_ft(self) -> Dict[str, type]:
+    def _motors_ft(self) -> dict[str, type]:
         """Features moteurs (positions seulement pour commencer)."""
         return {f"{name}.pos": float for name in self.motors.keys()}
 
     @property
-    def _cameras_ft(self) -> Dict[str, tuple]:
+    def _cameras_ft(self) -> dict[str, tuple]:
         return {
-            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3)
-            for cam in self.cameras
+            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
         }
 
     @cached_property
-    def observation_features(self) -> Dict[str, type | tuple]:
+    def observation_features(self) -> dict[str, type | tuple]:
         return {**self._motors_ft, **self._cameras_ft}
 
     @cached_property
-    def action_features(self) -> Dict[str, type]:
+    def action_features(self) -> dict[str, type]:
         return self._motors_ft
 
     # --------- Connection / calibration ---------
 
     @property
     def is_connected(self) -> bool:
-        return self.bus.is_connected and all(
-            cam.is_connected for cam in self.cameras.values()
-        )
+        return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
 
     @property
     def is_calibrated(self) -> bool:
@@ -116,8 +112,6 @@ class RobstrideTest(Robot):
             self.bus.set_zero_position()
 
         logger.info(f"{self} connected.")
-        
-
 
     def calibrate(self) -> None:
         if self.calibration:
@@ -146,15 +140,14 @@ class RobstrideTest(Robot):
             self.calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=0,
-                homing_offset=0,  #we set the zero inside motor software
-                range_min=range_mins[motor], #need int values here
+                homing_offset=0,  # we set the zero inside motor software
+                range_min=range_mins[motor],  # need int values here
                 range_max=range_maxes[motor],
             )
 
         self.bus.write_calibration(self.calibration)
         self._save_calibration()
         print("Calibration saved to", self.calibration_fpath)
-            
 
     def configure(self) -> None:
         """Configure motors with appropriate settings."""
@@ -173,9 +166,7 @@ class RobstrideTest(Robot):
         start = time.perf_counter()
 
         pos_dict = self.bus.sync_read("Present_Position")
-        obs_dict: dict[str, Any] = {
-            f"{motor}.pos": val for motor, val in pos_dict.items()
-        }
+        obs_dict: dict[str, Any] = {f"{motor}.pos": val for motor, val in pos_dict.items()}
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -187,11 +178,8 @@ class RobstrideTest(Robot):
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         return obs_dict
-    
 
-    def _denormalize_value(
-        self, data_name: str, motor_name: str, normalized_value: float
-    ) -> float: 
+    def _denormalize_value(self, data_name: str, motor_name: str, normalized_value: float) -> float:
         """Convert a normalized value back to the motor's native unit (degrees)."""
         motor = self.motors[motor_name]
         if motor.norm_mode == MotorNormMode.DEGREES:
@@ -201,58 +189,36 @@ class RobstrideTest(Robot):
             # Convert radians to degrees
             return np.degrees(normalized_value)
         else:
-            raise ValueError(
-                f"Unsupported normalization mode {motor.norm_mode} for motor {motor_name}"
-            )
-
-
-
-
-
+            raise ValueError(f"Unsupported normalization mode {motor.norm_mode} for motor {motor_name}")
 
     def send_normalized_action(self, action: dict[str, Any]) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         goal_pos = {
-            key.removesuffix(".pos"): self._denormalize_value(
-                f"{key}.pos", key.removesuffix(".pos"), val
-            )
+            key.removesuffix(".pos"): self._denormalize_value(f"{key}.pos", key.removesuffix(".pos"), val)
             for key, val in action.items()
             if key.endswith(".pos")
         }
 
         if self.config.max_relative_target is not None:
             present_pos = self.bus.sync_read("Present_Position")
-            goal_present_pos = {
-                key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()
-            }
-            goal_pos = ensure_safe_goal_position(
-                goal_present_pos, self.config.max_relative_target
-            )
+            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
+            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
-        self.bus.sync_write("Goal_Position", goal_pos,normalize=True)
+        self.bus.sync_write("Goal_Position", goal_pos, normalize=True)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
-    
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        goal_pos = {
-            key.removesuffix(".pos"): val
-            for key, val in action.items()
-            if key.endswith(".pos")
-        }
+        goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
         if self.config.max_relative_target is not None:
             present_pos = self.bus.sync_read("Present_Position")
-            goal_present_pos = {
-                key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()
-            }
-            goal_pos = ensure_safe_goal_position(
-                goal_present_pos, self.config.max_relative_target
-            )
+            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
+            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
         self.bus.sync_write("Goal_Position", goal_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
@@ -272,5 +238,5 @@ class RobstrideTest(Robot):
 
     # --------- Utils ---------
 
-    def _deg_to_rad(self, deg: Dict[str, float | int]) -> Dict[str, float]:
+    def _deg_to_rad(self, deg: dict[str, float | int]) -> dict[str, float]:
         return {m: np.deg2rad(float(v)) for m, v in deg.items()}

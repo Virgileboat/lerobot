@@ -11,20 +11,16 @@ on exectution do th efolowing :
 -reboot motor
 """
 
-import can
 from time import sleep, time
-import numpy as np
-from enum import IntEnum
-from struct import unpack
-from struct import pack
+
+import can
 
 from lerobot.motors.robstride.robstride_toolkit import *
 
 bus = can.interface.Bus(interface="socketcan", channel="can0")
 
 
-
-print(f"Pinging motor using CANopen protocol...")
+print("Pinging motor using CANopen protocol...")
 for i in range(128):
     motor_id = i
     ping = ping_canopen(bus, motor_id)
@@ -34,7 +30,7 @@ for i in range(128):
         break
 
 if not ping:
-    print(f"Pinging motor using private protocol...")
+    print("Pinging motor using private protocol...")
     for i in range(128):
         motor_id = i
         ping = ping_private(bus, motor_id)
@@ -44,7 +40,7 @@ if not ping:
             break
 
 if not ping:
-    print(f"Pinging motor using MIT protocol...")
+    print("Pinging motor using MIT protocol...")
     for i in range(128):
         motor_id = i
         ping = ping_mit(bus, motor_id)
@@ -71,22 +67,20 @@ if protocol != "MIT":
         input("reboot motor and press enter to continue...")
 
 
-
-
 print("current motor id is :", motor_id)
 new_id = int(input("Enter new motor ID (0-127): "))
 if 1 <= new_id <= 127:
     print(f"Changing motor ID from {motor_id} to {new_id}...")
     change_motor_id(bus, motor_id, new_id)
-else :
+else:
     print("Invalid motor ID. Must be between 1 and 127.")
-
 
 
 stop
 
 ### frequency test
 import time
+
 msg = can.Message(arbitration_id=1, data=[127, 255, 127, 240, 40, 51, 55, 255], is_extended_id=False)
 t_ini = time.time()
 n_msg = 0
@@ -96,4 +90,4 @@ while time.time() - t_ini < 10.0:
     bus.recv(0.01)
 t_end = time.time()
 dt = t_end - t_ini
-print(f"Sent {n_msg} messages in {dt:.2f} seconds ({n_msg/dt:.2f} Hz)")
+print(f"Sent {n_msg} messages in {dt:.2f} seconds ({n_msg / dt:.2f} Hz)")
